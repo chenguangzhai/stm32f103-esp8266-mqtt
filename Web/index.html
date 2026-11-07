@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>农业物联网与图书管理综合平台</title>
+    <link rel="icon" href="data:,">
+    <!-- 本地库，不走 CDN：比赛现场网络受限时 unpkg 拉不下来，
+         整个页面会连 "mqtt is not defined" 都报不出来，只留一片空白。 -->
+    <script src="./mqtt.min.js"></script>
+    <style>
+        body { font-family: 'Microsoft YaHei', sans-serif; background: #f0f2f5; text-align: center; padding-top: 20px; }
+        .card { background: white; width: 800px; margin: 0 auto; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        h1 { color: #333; font-size: 24px; }
+        .hidden { display: none !important; }
+
+        /* 登录框 */
+        .login-box input { padding: 10px; margin: 8px 0; width: 60%; border: 1px solid #ccc; border-radius: 5px; }
+        .login-box button { padding: 10px 20px; background: #1890ff; color: white; border: none; border-radius: 5px; cursor: pointer; width: 60%; margin-top: 10px; font-size: 16px; }
+
+        /* 数据展示区 */
+        .data-box { display: flex; flex-wrap: wrap; justify-content: space-between; margin-top: 20px; padding: 15px; background: #e6f7ff; border-radius: 8px;}
+        /* 固定 4 列：8 个字段正好两行。原来 flex:1 + min-width:100px 会挤成 7+1，
+           最后一项单独占一行，看着像漏了个字段。 */
+        .item { flex: 0 0 calc(25% - 8px); margin-bottom: 10px;}
+        .value { font-size: 20px; font-weight: bold; color: #1890ff; display: block; margin-top: 5px;}
+        .value.flash { color: #52c41a; transition: color 0.1s; }
+
+        /* 控制区 */
+        .control-box { display: flex; justify-content: space-between; margin-top: 20px; }
+        .panel { flex: 1; margin: 0 10px; padding: 15px; border-radius: 8px; background: #f6ffed; border: 1px solid #b7eb8f; text-align: left;}
+        .panel-red { background: #fff1f0; border: 1px solid #ffccc7;}
+
+        .btn { padding: 8px 15px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; color: white; }
+        .btn-start { background: #52c41a; }
+        .btn-stop { background: #f5222d; }
+        .btn-alarm { background: #ff4d4f; }
+        .btn:disabled { background: #bfbfbf; cursor: not-allowed; }
+
+        .status { margin-top: 10px; font-size: 14px; color: #888; }
+        .user-info { text-align: right; font-size: 14px; color: #666; margin-bottom: 10px;}
+
+        /* 表格区 */
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+        th { background-color: #fafafa; }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <!-- 登录区域 -->
+        <div id="loginArea" class="login-box">
+            <h1>🌱 综合物联网监控平台</h1>
+            <input type="text" id="username" placeholder="请输入用户名 (admin)">
+            <input type="password" id="password" placeholder="请输入密码 (admin123)">
+            <button onclick="doLogin()">登 录</button>
+        </div>
+
+        <!-- 监控主界面 -->
+        <div id="mainArea" class="hidden">
+            <div class="user-info">当前登录: <span id="currentUser" style="color:#1890ff; font-weight:bold;"></span></div>
+
+            <div class="status" id="status">正在连接服务器...</div>
+
+            <!-- 数据展示 -->
+            <div class="data-box">
+                <div class="item"><span>温度 (℃)</span><span class="value" id="temp">--</span></div>
+                <div class="item"><span>湿度 (%)</span><span class="value" id="humi">--</span></div>
+                <div class="item"><span>光照 (Lux)</span><span class="value" id="light">--</span></div>
+                <div class="item"><span>土壤温度 (℃)</span><span class="value" id="solitemp">--</span></div>
+                <div class="item"><span>旋钮1电压 (V)</span><span class="value" id="knob1">--</span></div>
+                <div class="item"><span>旋钮2电压 (V)</span><span class="value" id="knob2">--</span></div>
+                <div class="item"><span>当前模式</span><span class="value" id="mode">--</span></div>
+                <div class="item"><span>风扇状态</span><span class="value" id="fan_status">--</span></div>
+            </div>
+
+            <!-- 控制面板 -->
+            <div class="control-box">
+                <!-- 题1：农业控制 -->
+                <div class="panel">
+                    <h3>农业控制面板</h3>
+                    <div style="margin-top:10px;">
+                        <button class="btn btn-start" onclick="controlFan(1)">启动风扇</button>
+                        <button class="btn btn-stop" onclick="controlFan(0)">停止风扇</button>
+                    </div>
+                    <div style="margin-top: 15px;">
+                        <span>设定光照阈值(Lux)：</span>
+                        <input type="number" id="lightThreshold" value="500" style="width: 80px; padding: 5px;">
+                        <button class="btn" id="thBtn" style="background:#1890ff; padding:5px 10px;" onclick="setThreshold()">下发阈值</button>
+                        <div style="font-size:12px; color:#999; margin-top:5px;">
+                            设备端暂未实现阈值自动控制，按钮先禁用，避免按了没反应当成故障。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 题2：火灾报警控制 -->
+                <div class="panel panel-red">
+                    <h3>火灾报警系统</h3>
+                    <div style="margin-top:10px;">
+                        <button class="btn btn-alarm" onclick="controlFireAlarm('on')">🚨 触发报警</button>
+                        <button class="btn" style="background:#888;" onclick="controlFireAlarm('off')">停止报警</button>
+                    </div>
+                    <div style="margin-top: 15px; font-size: 13px; color: #888;">
+                        * 控制嵌入式Linux节点蜂鸣器与指示灯
+                    </div>
+                </div>
+            </div>
+
+            <!-- 题2：RFID图书借阅记录 -->
+            <h3 style="text-align: left; margin-top: 30px;">📖 图书借阅记录 (RFID)</h3>
+            <table id="rfidTable">
+                <thead>
+                    <tr>
+                        <th>时间</th>
+                        <th>借阅者 ID</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- 刷卡记录会自动出现在这里 -->
+                </tbody>
+            </table>
+
+        </div>
+    </div>
+
+    <script>
+        /* ============================================================
+           与设备端约定的主题与格式（必须和 mqtt_client.h 一致）
+             上行 4G_team_1_1   ：{"temp":24.8,"humi":60,...,"rfid":"A1B2C3"}
+             下行 Client_team_1_1：{"fan_status":1} / {"mode":0}
+           注意下行是「扁平的键值对」，不是 {"cmd":"fan","action":"on"} ——
+           设备端只按字段名匹配，带 cmd 包一层的报文会被整条忽略。
+           ============================================================ */
+        const TOPIC_UP   = '4G_team_1_1';
+        const TOPIC_DOWN = 'Client_team_1_1';
+        const BROKER_WS  = 'ws://111.230.92.227:8083/mqtt';
+
+        // 超过这个时间没收到数据就提示离线（设备每 5 秒上报一次）
+        const OFFLINE_MS = 15000;
+
+        let client = null;
+        let lastMsgAt = 0;
+        let lastRfid = null;
+
+        // 1. 登录逻辑（纯前端校验，比赛演示够用）
+        function doLogin() {
+            const user = document.getElementById('username').value;
+            const pass = document.getElementById('password').value;
+
+            if (user === 'admin' && pass === 'admin123') {
+                document.getElementById('loginArea').classList.add('hidden');
+                document.getElementById('mainArea').classList.remove('hidden');
+                document.getElementById('currentUser').innerText = user;
+                document.getElementById('thBtn').disabled = true;   // 设备端未实现
+                connectMQTT();
+            } else {
+                alert("密码错误！请用 admin / admin123");
+            }
+        }
+
+        // 2. MQTT 连接
+        function connectMQTT() {
+            setStatus('正在连接 ' + BROKER_WS + ' ...', '#888');
+
+            client = mqtt.connect(BROKER_WS, {
+                clientId: 'WebClient_' + Math.random().toString(16).substr(2, 8),
+                username: 'admin',
+                password: 'admin123',
+                keepalive: 60,
+                reconnectPeriod: 3000      // 断线后自动重连，不用手动刷新
+            });
+
+            client.on('connect', function () {
+                setStatus('✅ 已连接，等待硬件数据...', 'green');
+                client.subscribe(TOPIC_UP, { qos: 0 }, function (err) {
+                    if (err) {
+                        setStatus('❌ 订阅失败：' + err.message, 'red');
+                    }
+                });
+            });
+
+            // 收到硬件数据 —— 这里是「回显」的全部逻辑
+            client.on('message', function (topic, message) {
+                const raw = message.toString();
+
+                let data;
+                try {
+                    data = JSON.parse(raw);
+                } catch (e) {
+                    // 解析失败不要静默吞掉，把原文打出来，否则永远查不出问题
+                    console.warn('收到非 JSON 数据：', raw);
+                    setStatus('⚠️ 收到非 JSON 数据：' + raw, 'orange');
+                    return;
+                }
+
+                if (typeof data !== 'object' || data === null) return;
+
+                renderData(data);
+                lastMsgAt = Date.now();
+            });
+
+            client.on('reconnect', function () { setStatus('🔄 正在重连...', 'orange'); });
+            client.on('error',    function (e) { setStatus('❌ 连接错误：' + e.message, 'red'); });
+            client.on('close',    function ()  {
+                /* 这里只能知道「关了」，拿不到原因。最常见的两种：
+                   ① 页面被 CSP 拦住（内置预览面板就是这样，connect-src 不放行 ws）
+                      —— 浏览器根本不会去连，Console 里有一行 violates ... Content Security Policy；
+                   ② 服务器不可达 / 端口没开。
+                   所以提示里直接让人去看 Console，而不是干瞪着「连接已断开」。 */
+                setStatus('⚠️ 连接已断开 —— 按 F12 看 Console：若提示 Content Security Policy，'
+                        + '说明当前页面环境禁止 WebSocket，请用浏览器直接打开本文件', 'red');
+            });
+        }
+
+        // 3. 把一包数据刷到页面上
+        function renderData(data) {
+            // 数值字段：只有报文里带了才更新，避免某次漏字段把界面清空
+            // 浮点字段固定一位小数：JSON 里 27.0 会被解析成 27，直接显示就变 "27"，
+            // 和物理量的位数对不上（温度/电压都该有一位小数）。
+            if (data.temp     !== undefined) setVal('temp',     fixed1(data.temp));
+            if (data.humi     !== undefined) setVal('humi',     data.humi);
+            if (data.light    !== undefined) setVal('light',    data.light);
+            if (data.solitemp !== undefined) setVal('solitemp', data.solitemp);
+            if (data.knob1    !== undefined) setVal('knob1',    fixed1(data.knob1));
+            if (data.knob2    !== undefined) setVal('knob2',    fixed1(data.knob2));
+
+            // mode：1=自动 0=手动（设备发的是数字，这里用 == 兼容 "1" 字符串）
+            if (data.mode !== undefined) {
+                setVal('mode', Number(data.mode) === 1 ? '自动' : '手动');
+            }
+            if (data.fan_status !== undefined) {
+                setVal('fan_status', Number(data.fan_status) === 1 ? '运行中' : '已停止');
+            }
+
+            /* RFID 只在「卡号变化」时记一行。
+               设备每 5 秒上报一次且每次都带 rfid，原来那版 if (data.rfid !== undefined)
+               会让表格每分钟涨 12 行，同一张卡重复几百条 —— 这是最容易忽略的坑。 */
+            if (data.rfid !== undefined && data.rfid !== null && data.rfid !== '') {
+                const id = String(data.rfid);
+                if (id !== lastRfid) {
+                    lastRfid = id;
+                    addRfidRecord(id);
+                }
+            }
+
+            setStatus('📩 刚刚收到新数据（' + new Date().toLocaleTimeString() + '）', 'green');
+        }
+
+        function setVal(id, v) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.innerText = v;
+            el.classList.add('flash');
+            setTimeout(() => el.classList.remove('flash'), 150);
+        }
+
+        // 固定一位小数；非数字原样返回，别把 '--' 变成 'NaN'
+        function fixed1(v) {
+            const n = Number(v);
+            return Number.isFinite(n) ? n.toFixed(1) : v;
+        }
+
+        function setStatus(text, color) {
+            const el = document.getElementById('status');
+            el.innerText = text;
+            el.style.color = color || '#888';
+        }
+
+        /* 4. 控制风扇
+           设备端认的是 {"fan_status":1}，不是 {"cmd":"fan","action":"on"}。
+           打开 console 能看到设备日志里回「未知字段 cmd，忽略」——
+           那种情况下网页提示成功、风扇不动，最难查。 */
+        function controlFan(on) {
+            if (!client || !client.connected) return alert('未连接服务器！');
+            const payload = JSON.stringify({ fan_status: on ? 1 : 0 });
+            client.publish(TOPIC_DOWN, payload, { qos: 0 });
+            setStatus('已下发：' + payload, '#1890ff');
+        }
+
+        // 5. 定阈值（设备端尚未实现，按钮已禁用；要实现时发 {"light_th":500} 即可）
+        function setThreshold() {
+            if (!client || !client.connected) return alert('未连接服务器！');
+            const th = parseInt(document.getElementById('lightThreshold').value, 10);
+            client.publish(TOPIC_DOWN, JSON.stringify({ light_th: th }), { qos: 0 });
+        }
+
+        // 6. 火灾报警（Linux 节点，不在本工程范围内）
+        function controlFireAlarm(status) {
+            if (!client || !client.connected) return alert('未连接服务器！');
+            client.publish(TOPIC_DOWN, JSON.stringify({ cmd: 'fire_alarm', status: status }), { qos: 0 });
+        }
+
+        // 7. 添加 RFID 表格行
+        function addRfidRecord(rfidId) {
+            const tbody = document.querySelector('#rfidTable tbody');
+            const tr = document.createElement('tr');
+            const now = new Date();
+            const timeStr = [now.getHours(), now.getMinutes(), now.getSeconds()]
+                .map(n => String(n).padStart(2, '0')).join(':');
+
+            tr.innerHTML = `<td>${timeStr}</td><td>${rfidId}</td>`;
+            tbody.prepend(tr);
+
+            // 只留最近 50 条，长时间演示不会把页面拖慢
+            while (tbody.rows.length > 50) tbody.deleteRow(tbody.rows.length - 1);
+        }
+
+        // 8. 每秒检查一次「多久没收到数据了」
+        setInterval(function () {
+            if (!lastMsgAt) return;
+            const age = Date.now() - lastMsgAt;
+            if (age > OFFLINE_MS) {
+                setStatus('⚠️ 已 ' + Math.round(age / 1000) + ' 秒没收到数据，设备可能掉线', 'red');
+            }
+        }, 1000);
+    </script>
+</body>
+</html>

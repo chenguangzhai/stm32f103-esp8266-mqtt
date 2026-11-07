@@ -1,0 +1,10 @@
+* text=auto
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.bin binary
+*.hex binary
+*.elf binary
