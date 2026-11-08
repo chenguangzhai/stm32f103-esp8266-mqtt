@@ -105,3 +105,17 @@ cmake --build build/Debug
 2. `AT+CWJAP_DEF` 之后有没有 `WIFI GOT IP`
 3. `AT+CIPSTATUS` 里是不是 `STATUS:5`（没连上）
 4. MQTT CONNACK 的返回码——非 0 就是账号、ClientID 或 broker 的问题
+
+## 许可证
+
+本项目代码采用 [MIT](LICENSE)：可以自由使用、修改、商用，保留版权声明即可。
+
+仓库内包含的第三方组件沿用各自许可证，版权不属于本项目：
+
+| 目录 | 组件 | 许可证 |
+| --- | --- | --- |
+| `Drivers/` | STMicroelectronics HAL + CMSIS | BSD-3-Clause |
+| `Application/Middle/ESP8266/mqtt/` | Eclipse Paho MQTTPacket | EPL-2.0 / EDL-1.0 |
+| `Application/Middle/ESP8266/json/` | cJSON | MIT |
+| `Web/mqtt.min.js` | MQTT.js | MIT |
+
