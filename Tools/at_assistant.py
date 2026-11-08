@@ -2,10 +2,8 @@
 # -*- coding: utf-8 -*-
 """ESP8266 AT 指令串口助手
 
-发送口和接收口可以分开：
-  · 直连模组时，一个口就够（勾「与发送口相同」）
-  · 模组的 TX 被 STM32 占着时，PC 只能从板子的日志口（USART1）看响应 ——
-    这时发送口选直连的那个，接收口选板子的日志口
+收发共用同一个串口（一根 USB-TTL），发送和接收之间靠手动改接线切换，
+所以界面顶部常驻一行提示，避免发完指令忘了把线接回来。
 
 另外还负责：
   1. 实时回显模组返回的每一行，OK / ERROR / +xxxx 分色，一眼看出卡在哪一步
@@ -13,7 +11,7 @@
   3. 一键发 +++ 退出透传（这一条不能带换行，单独处理）
 
 运行：C:\\Python311\\python.exe at_assistant.py
-或者双击同目录的 run_assistant.bat
+或者双击工程根目录的 AT_Assistant.exe
 """
 
 import datetime
@@ -71,13 +69,14 @@ TAGS = {
     "ts": "#9aa0a6",
 }
 
+TIP_TEXT = "⚠ 收发同一个口 —— 发 AT 指令前把线接到模组 RX，看回显时再接回串口 1（USART1）"
+
 
 class AtAssistant:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.ser_tx = None          # 只写
-        self.ser_rx = None          # 只读；勾了「与发送口相同」时和 ser_tx 是同一个对象
-        self.threads = []
+        self.ser = None
+        self.reader = None
         self.running = threading.Event()
         self.rxq = queue.Queue()
         self.line_buf = ""
@@ -107,55 +106,46 @@ class AtAssistant:
             pass
         style.configure("Send.TButton", font=("Microsoft YaHei UI", 10, "bold"))
 
-        # ---- 顶部：两行串口参数 ----
-        top = ttk.Frame(self.root, padding=(10, 8, 10, 2))
-        top.grid(row=0, column=0, sticky="ew")
+        # ---- 顶部：串口参数 ----
+        bar = ttk.Frame(self.root, padding=(10, 8, 10, 2))
+        bar.grid(row=0, column=0, sticky="ew")
 
-        # 第一行：发送口
-        r0 = ttk.Frame(top)
-        r0.pack(fill="x")
-        ttk.Label(r0, text="发送口", width=7).pack(side="left")
+        ttk.Label(bar, text="串口").pack(side="left")
         self.var_port = tk.StringVar()
-        self.cmb_port = ttk.Combobox(r0, textvariable=self.var_port, width=32, state="readonly")
-        self.cmb_port.pack(side="left", padx=(0, 4))
-        self.btn_refresh = ttk.Button(r0, text="刷新", width=6, command=self._refresh_ports)
+        self.cmb_port = ttk.Combobox(bar, textvariable=self.var_port, width=34, state="readonly")
+        self.cmb_port.pack(side="left", padx=(4, 4))
+
+        self.btn_refresh = ttk.Button(bar, text="刷新", width=6, command=self._refresh_ports)
         self.btn_refresh.pack(side="left")
 
-        ttk.Label(r0, text="波特率").pack(side="left", padx=(12, 0))
+        ttk.Label(bar, text="波特率").pack(side="left", padx=(12, 0))
         self.var_baud = tk.StringVar(value=DEFAULT_BAUD)
-        self.cmb_baud = ttk.Combobox(r0, textvariable=self.var_baud, width=8, values=BAUDS, state="normal")
+        self.cmb_baud = ttk.Combobox(bar, textvariable=self.var_baud, width=8, values=BAUDS, state="normal")
         self.cmb_baud.pack(side="left", padx=4)
 
-        self.btn_open = ttk.Button(r0, text="打开串口", width=10, command=self._toggle_port)
+        self.btn_open = ttk.Button(bar, text="打开串口", width=10, command=self._toggle_port)
         self.btn_open.pack(side="left", padx=(8, 0))
 
-        self.btn_clear = ttk.Button(r0, text="清屏", width=6, command=self._clear)
+        self.btn_clear = ttk.Button(bar, text="清屏", width=6, command=self._clear)
         self.btn_clear.pack(side="right")
-        self.btn_save = ttk.Button(r0, text="保存日志", width=9, command=self._save_log)
+        self.btn_save = ttk.Button(bar, text="保存日志", width=9, command=self._save_log)
         self.btn_save.pack(side="right", padx=(0, 6))
 
-        # 第二行：接收口
-        r1 = ttk.Frame(top)
-        r1.pack(fill="x", pady=(5, 0))
-        ttk.Label(r1, text="接收口", width=7).pack(side="left")
-        self.var_same = tk.BooleanVar(value=True)
-        self.chk_same = ttk.Checkbutton(
-            r1, text="与发送口相同", variable=self.var_same, command=self._on_same_toggle
-        )
-        self.chk_same.pack(side="left")
-        self.var_rx_port = tk.StringVar()
-        self.cmb_rx = ttk.Combobox(r1, textvariable=self.var_rx_port, width=32, state="disabled")
-        self.cmb_rx.pack(side="left", padx=(6, 4))
-        ttk.Label(r1, text="波特率").pack(side="left", padx=(12, 0))
-        self.var_rx_baud = tk.StringVar(value=DEFAULT_BAUD)
-        self.cmb_rx_baud = ttk.Combobox(
-            r1, textvariable=self.var_rx_baud, width=8, values=BAUDS, state="disabled"
-        )
-        self.cmb_rx_baud.pack(side="left", padx=4)
+        # ---- 常驻提示：收发同口，要改接线 ----
+        tk.Label(
+            self.root,
+            text=TIP_TEXT,
+            bg="#fff3cd",
+            fg="#7a5c00",
+            anchor="w",
+            padx=10,
+            pady=4,
+            font=("Microsoft YaHei UI", 9),
+        ).grid(row=1, column=0, sticky="ew", padx=10, pady=(4, 0))
 
         # ---- 中部：接收区 ----
-        mid = ttk.Frame(self.root, padding=(10, 0, 10, 0))
-        mid.grid(row=1, column=0, sticky="nsew")
+        mid = ttk.Frame(self.root, padding=(10, 6, 10, 0))
+        mid.grid(row=2, column=0, sticky="nsew")
         mid.rowconfigure(0, weight=1)
         mid.columnconfigure(0, weight=1)
 
@@ -183,7 +173,7 @@ class AtAssistant:
 
         # ---- 显示选项 ----
         opts = ttk.Frame(self.root, padding=(10, 4, 10, 2))
-        opts.grid(row=2, column=0, sticky="ew")
+        opts.grid(row=3, column=0, sticky="ew")
         self.var_ts = tk.BooleanVar(value=True)
         self.var_hex_show = tk.BooleanVar(value=False)
         self.var_autoscroll = tk.BooleanVar(value=True)
@@ -193,7 +183,7 @@ class AtAssistant:
 
         # ---- 快捷指令 ----
         box = ttk.LabelFrame(self.root, text=" AT 指令（点一下直接发） ", padding=(8, 6, 8, 8))
-        box.grid(row=3, column=0, sticky="ew", padx=10, pady=(4, 2))
+        box.grid(row=4, column=0, sticky="ew", padx=10, pady=(4, 2))
         for i, (label, cmd, auto) in enumerate(QUICK_CMDS):
             btn = ttk.Button(box, text=label, command=lambda c=cmd, a=auto: self._quick(c, a))
             btn.grid(row=i // 5, column=i % 5, sticky="ew", padx=3, pady=3)
@@ -202,7 +192,7 @@ class AtAssistant:
 
         # ---- 底部：发送区 ----
         send = ttk.Frame(self.root, padding=(10, 4, 10, 4))
-        send.grid(row=4, column=0, sticky="ew")
+        send.grid(row=5, column=0, sticky="ew")
         send.columnconfigure(1, weight=1)
 
         ttk.Label(send, text="发送").grid(row=0, column=0, padx=(0, 6))
@@ -230,18 +220,13 @@ class AtAssistant:
         # ---- 状态栏 ----
         self.var_status = tk.StringVar(value="未连接")
         status = ttk.Frame(self.root, padding=(10, 2, 10, 6))
-        status.grid(row=5, column=0, sticky="ew")
+        status.grid(row=6, column=0, sticky="ew")
         ttk.Label(status, textvariable=self.var_status, foreground="#57606a").pack(side="left")
 
-        self.root.rowconfigure(1, weight=1)
+        self.root.rowconfigure(2, weight=1)
         self.root.columnconfigure(0, weight=1)
 
     # ------------------------------------------------------------ 串口
-
-    @staticmethod
-    def _port_name(desc: str) -> str:
-        """从 "COM5  USB-SERIAL CH340" 里取出 "COM5" """
-        return desc.split()[0] if desc.strip() else ""
 
     def _refresh_ports(self):
         ports = list(list_ports.comports())
@@ -249,47 +234,35 @@ class AtAssistant:
         ports.sort(key=lambda p: ("Bluetooth" in (p.description or ""), p.device))
         items = [f"{p.device}  {p.description}" for p in ports]
         self.cmb_port["values"] = items
-        self.cmb_rx["values"] = items
-
         if not items:
             self.var_port.set("")
-            self.var_rx_port.set("")
             self.var_status.set("没找到任何串口 —— 驱动装了吗？USB-TTL 插好了吗？")
-            return
-
-        if self.var_port.get() not in items:
+        elif self.var_port.get() not in items:
             self.var_port.set(items[0])
-        if self.var_rx_port.get() not in items:
-            # 接收口默认挑一个和发送口不同的，省得用户手动改
-            self.var_rx_port.set(items[1] if len(items) > 1 else items[0])
-        self.var_status.set(f"找到 {len(items)} 个串口")
-
-    def _on_same_toggle(self):
-        same = self.var_same.get()
-        self.cmb_rx.configure(state="disabled" if same else "readonly")
-        self.cmb_rx_baud.configure(state="disabled" if same else "normal")
+            self.var_status.set(f"找到 {len(items)} 个串口")
 
     def _toggle_port(self):
-        if self.ser_tx and self.ser_tx.is_open:
+        if self.ser and self.ser.is_open:
             self._close_port()
         else:
             self._open_port()
 
     def _open_port(self):
-        tx_name = self._port_name(self.var_port.get())
-        if not tx_name:
-            messagebox.showwarning("提示", "先选一个发送串口。")
+        raw = self.var_port.get()
+        if not raw:
+            messagebox.showwarning("提示", "先选一个串口。")
             return
+        port = raw.split()[0]
         try:
-            tx_baud = int(self.var_baud.get())
+            baud = int(self.var_baud.get())
         except ValueError:
-            messagebox.showwarning("提示", "发送口波特率要是数字，ESP8266 默认 115200。")
+            messagebox.showwarning("提示", "波特率要是数字，ESP8266 默认 115200。")
             return
 
         try:
-            tx = serial.Serial(
-                port=tx_name,
-                baudrate=tx_baud,
+            self.ser = serial.Serial(
+                port=port,
+                baudrate=baud,
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
@@ -298,94 +271,36 @@ class AtAssistant:
         except Exception as e:
             messagebox.showerror(
                 "打不开",
-                f"发送口 {tx_name} 打开失败：\n\n{e}\n\n"
+                f"{port} 打开失败：\n\n{e}\n\n"
                 "常见原因：被别的串口助手占着、被烧录工具占着、串口选错了。",
             )
+            self.ser = None
             return
 
-        rx = tx
-        if not self.var_same.get():
-            rx_name = self._port_name(self.var_rx_port.get())
-            if not rx_name:
-                tx.close()
-                messagebox.showwarning("提示", "接收口没选。")
-                return
-            try:
-                rx_baud = int(self.var_rx_baud.get())
-            except ValueError:
-                tx.close()
-                messagebox.showwarning("提示", "接收口波特率要是数字。")
-                return
-            if rx_name == tx_name:
-                tx.close()
-                messagebox.showwarning(
-                    "提示",
-                    f"接收口和发送口都是 {tx_name}，一个口不能开两次。\n"
-                    "要么换个口，要么勾上「与发送口相同」。",
-                )
-                return
-            try:
-                rx = serial.Serial(
-                    port=rx_name,
-                    baudrate=rx_baud,
-                    bytesize=serial.EIGHTBITS,
-                    parity=serial.PARITY_NONE,
-                    stopbits=serial.STOPBITS_ONE,
-                    timeout=0.05,
-                )
-            except Exception as e:
-                tx.close()
-                messagebox.showerror(
-                    "打不开",
-                    f"接收口 {rx_name} 打开失败：\n\n{e}\n\n"
-                    "接收口如果是板子的日志口，先关掉正占着它的那个串口助手。",
-                )
-                return
-            self.link_desc = f"TX {tx_name}@{tx_baud}  RX {rx_name}@{rx_baud}"
-            targets = [tx, rx]
-        else:
-            self.link_desc = f"{tx_name}@{tx_baud}（收发同口）"
-            targets = [tx]
-
-        self.ser_tx = tx
-        self.ser_rx = rx
         self.running.set()
-        self.threads = []
-        for s in targets:
-            t = threading.Thread(target=self._read_loop, args=(s,), daemon=True)
-            t.start()
-            self.threads.append(t)
+        self.reader = threading.Thread(target=self._read_loop, args=(self.ser,), daemon=True)
+        self.reader.start()
 
+        self.link_desc = f"{port}@{baud}"
         self.btn_open.configure(text="关闭串口")
-        for w in (self.cmb_port, self.cmb_baud, self.cmb_rx, self.cmb_rx_baud, self.chk_same):
-            w.configure(state="disabled")
+        self.cmb_port.configure(state="disabled")
+        self.cmb_baud.configure(state="disabled")
         self._sys(f"已打开 {self.link_desc}，8N1")
 
     def _close_port(self):
         self.running.clear()
-        for t in self.threads:
-            t.join(timeout=0.4)
-        self.threads = []
-
-        # 收发同口时是两个指向同一个对象的引用，别 close 两次
-        closed = []
-        for s in (self.ser_tx, self.ser_rx):
-            if s is not None and not any(s is c for c in closed):
-                closed.append(s)
-        for s in closed:
-            try:
-                s.close()
-            except Exception:
-                pass
-        self.ser_tx = None
-        self.ser_rx = None
-
+        if self.reader is not None:
+            self.reader.join(timeout=0.4)
+            self.reader = None
+        try:
+            if self.ser:
+                self.ser.close()
+        except Exception:
+            pass
+        self.ser = None
         self.btn_open.configure(text="打开串口")
         self.cmb_port.configure(state="readonly")
         self.cmb_baud.configure(state="normal")
-        self.chk_same.configure(state="normal")
-        self._on_same_toggle()
-
         if self.line_buf:
             self._flush_partial()
         self._sys("串口已关闭")
@@ -488,12 +403,12 @@ class AtAssistant:
 
     def _exit_transparent(self):
         """+++ 是唯一的例外：不能带 CRLF，而且前后各要 1 秒静默。"""
-        if not (self.ser_tx and self.ser_tx.is_open):
+        if not (self.ser and self.ser.is_open):
             messagebox.showwarning("提示", "串口没开，发不出去。")
             return
         self._sys("发 +++ 退出透传：3 秒内什么都别发，等模组回 OK")
         try:
-            self.ser_tx.write(b"+++")
+            self.ser.write(b"+++")
         except Exception as e:
             self._sys(f"写串口失败：{e}")
             return
@@ -506,7 +421,7 @@ class AtAssistant:
         text = cmd if cmd is not None else self.var_input.get()
         if text == "":
             return
-        if not (self.ser_tx and self.ser_tx.is_open):
+        if not (self.ser and self.ser.is_open):
             messagebox.showwarning("提示", "串口没开，先点「打开串口」。")
             return
 
@@ -522,7 +437,7 @@ class AtAssistant:
             shown = text
 
         try:
-            self.ser_tx.write(payload)
+            self.ser.write(payload)
         except Exception as e:
             self._sys(f"写串口失败：{e}")
             return
@@ -573,7 +488,7 @@ class AtAssistant:
         self._sys(f"日志已保存：{path}")
 
     def _tick(self):
-        if self.ser_tx and self.ser_tx.is_open:
+        if self.ser and self.ser.is_open:
             head = f"已连接 {self.link_desc}"
         else:
             head = "未连接"
@@ -582,12 +497,11 @@ class AtAssistant:
 
     def _on_close(self):
         self.running.clear()
-        for s in (self.ser_tx, self.ser_rx):
-            try:
-                if s is not None:
-                    s.close()
-            except Exception:
-                pass
+        try:
+            if self.ser:
+                self.ser.close()
+        except Exception:
+            pass
         self.root.destroy()
 
 
