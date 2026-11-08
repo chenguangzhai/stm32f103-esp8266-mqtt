@@ -38,14 +38,8 @@ Tools/              PC 端 AT 调试工具（串口助手）
 
 ## 快速开始
 
-1. **填热点口令**（不进仓库）
-
-   ```bash
-   cd Application/Middle/ESP8266
-   cp wifi_secret.example.h wifi_secret.h
-   ```
-
-   然后编辑 `wifi_secret.h` 填自己的 **2.4GHz** 热点（ESP8266 不支持 5G，
+1. **填热点口令**：编辑 `Application/Middle/ESP8266/ESP8266.h` 顶部两行，
+   把 `WIFI_SSID` / `WIFI_PASS` 换成自己的 **2.4GHz** 热点（ESP8266 不支持 5G，
    连 5G 的现象是 `AT+CWJAP_DEF` 回 FAIL 或超时）。
 
 2. **改 MQTT 参数**：`Application/Middle/ESP8266/mqtt_client.h` 顶部的
@@ -107,7 +101,7 @@ npx serve .
 
 ## 串口调试工具
 
-工程根目录的 **`AT_Assistant.exe`** 是打包好的串口助手，双击就跑，不需要装 Python。
+`串口助手/AT_Assistant.exe` 是打包好的串口助手，双击就跑，不需要装 Python。
 源码在 `Tools/at_assistant.py`，想改就改，改完重新打包：
 
 ```bash

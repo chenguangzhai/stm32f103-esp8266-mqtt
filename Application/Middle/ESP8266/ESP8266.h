@@ -5,11 +5,10 @@
 #include <stdint.h>      /* uint8_t：以前是靠 uart_app.h 间接带进来的，别再依赖传递 */
 #include "uart_app.h"    /* 有意留在 .h：ESP8266.c / mqtt_client.c / main.c 三处都要 Uart_*，删了得各补一遍。别再删 */
 
-/* ==================== 赛场参数（进场只改这一段）====================
-   WIFI_SSID / WIFI_PASS 在 wifi_secret.h 里（不进仓库），
-   仓库里只有 wifi_secret.example.h，复制改名后填自己的 2.4GHz 热点。
-   MQTT_HOST 的端口 1883 写死在 AT_CIPSTART 里，不在这里配。 */
-#include "wifi_secret.h"
+/* ==================== 赛场参数（进场只改这一段）====================*/
+#define WIFI_SSID           "your-ssid"//你的WiFi名称
+#define WIFI_PASS           "your-password"//你的WiFi密码
+
 #define MQTT_HOST           "111.230.92.227"    /* 赛场 MQTT 服务器 */
 
 /* ==================== AT 指令 ====================

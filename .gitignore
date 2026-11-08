@@ -14,9 +14,6 @@
 *.ept
 *.eide-template
 
-# 本地热点口令（复制 wifi_secret.example.h 后填入）
-Application/Middle/ESP8266/wifi_secret.h
-
 # 前端依赖
 Web/node_modules/
 
@@ -29,6 +26,6 @@ _baseline_*/
 __pycache__/
 *.pyc
 
-# PyInstaller 打包产物（exe 11MB，二进制不进仓库）
+# PyInstaller 打包产物（exe 10MB，二进制不进仓库）
 /_pyi_build/
-/AT_Assistant.exe
+*.exe
