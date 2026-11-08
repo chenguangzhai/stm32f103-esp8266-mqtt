@@ -94,6 +94,8 @@ cmake --build build/Debug
   浏览器连不了，面板走 8083 的 ws）。`cd Web && npm install && npx serve .`
 - `Tools/at_assistant.py`：PC 端 AT 指令助手，实时回显 + 一键发指令 + HEX 收发。
   单文件 tkinter，读串口放在后台线程，界面不卡。
+  Windows 现成的可执行文件在 [Releases](https://github.com/chenguangzhai/stm32f103-esp8266-mqtt/releases/latest)
+  里，下载双击即用，不需要装 Python。
 
 ## 排查顺序
 
