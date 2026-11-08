@@ -29,6 +29,7 @@ Application/
 Core/               CubeMX 生成的 HAL 初始化（main / gpio / usart / dma）
 Drivers/            STM32F1 HAL + CMSIS
 Web/                浏览器端调试面板（mqtt.js over WebSocket）
+Tools/              PC 端 AT 调试工具（串口助手）
 ```
 
 分层原则：`ESP8266.c` 只认 AT 指令、不知道 MQTT 存在；`mqtt_client.c` 只认二进制报文、
@@ -103,6 +104,31 @@ npx serve .
 
 打开后填自己的 broker 地址即可。`Web/verify.js` 是一个独立的命令行验证脚本，
 可以直接在 Node 里跑收发热身，不用真的接板子。
+
+## 串口调试工具
+
+`Tools/at_assistant.py` 是一个 PC 端的 AT 指令助手，用来在接板子之前先单独把 ESP-01S 调通。
+
+```bash
+C:\Python311\python.exe -m pip install pyserial     # 只装这一次
+```
+
+双击 `Tools/run_assistant.bat` 即可启动，或者 `python Tools/at_assistant.py`。
+
+界面分四块：上面选串口和波特率，中间实时回显模组返回（`OK` 绿色、`ERROR`/`FAIL` 红色、
+`+CWJAP:` 这类主动上报紫色、本机发出的指令棕色加粗），下面一排 AT 指令点一下就发，
+最底下一行手敲指令回车发送，↑↓ 可以翻发送历史。
+
+三个针对 ESP8266 的特殊处理：
+
+- **结尾符可选**：AT 规范要求 `\r\n`，默认就是 CRLF。有些模组或固件对结尾敏感，可以逐项试。
+- **`+++` 单独走一条路**：退出透传的 `+++` 不能带换行，而且发之前和之后各要留 1 秒静默，
+  所以它不走"输入框 + 结尾符"那条路径，是独立按钮直接写 3 个字节。
+- **HEX 收发**：排查二进制报文时用，发送写 `41 54 0D 0A` 这种格式。
+
+接线：USB-TTL 的 TX 接模组 RX、RX 接模组 TX、GND 共地，模组供电 3.3V ——
+**不要**把 5V 直接加到 ESP-01S 的 VCC 上，也不要在 AT 调试时同时接 STM32 的 USART2，
+两个主机同时驱动一根 TX 会互相打架。
 
 ## 调试建议
 
