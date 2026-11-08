@@ -1,0 +1,26 @@
+# dot files
+/.vscode/launch.json
+/.settings
+/.eide/log
+/.eide.usr.ctx.json
+
+# project out
+/build
+/bin
+/obj
+/out
+
+# eide template
+*.ept
+*.eide-template
+
+# 本地热点口令（复制 wifi_secret.example.h 后填入）
+Application/Middle/ESP8266/wifi_secret.h
+
+# 前端依赖
+Web/node_modules/
+
+# 本地备份 / 快照，不进仓库
+_backup_*/
+_baseline_*/
+*.bak_*
