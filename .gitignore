@@ -28,3 +28,7 @@ _baseline_*/
 # Python 工具的字节码缓存
 __pycache__/
 *.pyc
+
+# PyInstaller 打包产物（exe 11MB，二进制不进仓库）
+/_pyi_build/
+/AT_Assistant.exe

@@ -107,15 +107,33 @@ npx serve .
 
 ## 串口调试工具
 
-`Tools/at_assistant.py` 是一个 PC 端的 AT 指令助手，用来在接板子之前先单独把 ESP-01S 调通。
+工程根目录的 **`AT_Assistant.exe`** 是打包好的串口助手，双击就跑，不需要装 Python。
+源码在 `Tools/at_assistant.py`，想改就改，改完重新打包：
 
 ```bash
-C:\Python311\python.exe -m pip install pyserial     # 只装这一次
+C:\Python311\python.exe -m pip install pyinstaller pyserial
+C:\Python311\python.exe -m PyInstaller --onefile --windowed --name AT_Assistant at_assistant.py
 ```
 
-双击 `Tools/run_assistant.bat` 即可启动，或者 `python Tools/at_assistant.py`。
+或者不打包，直接跑：`python Tools/at_assistant.py`（或双击 `Tools/run_assistant.bat`）。
 
-界面分四块：上面选串口和波特率，中间实时回显模组返回（`OK` 绿色、`ERROR`/`FAIL` 红色、
+### 收发可以走不同的串口
+
+这是它和普通串口助手最大的区别。两种接法：
+
+| 场景 | 发送口 | 接收口 |
+| --- | --- | --- |
+| USB-TTL 直连模组 | 模组那个 COM | 勾上「与发送口相同」 |
+| 模组 TX 已被 STM32 占着 | 直连模组 RX 的那个 COM | 板子日志口（USART1）的 COM |
+
+第二种情况值得说清楚：PC 发出去的字节直接进模组 RX，**但模组的回复是从它的 TX 出来、
+先进了 STM32 的 USART2**，PC 在模组那侧已经收不到了。所以接收口要单独选板子的日志口，
+让 MCU 把它收到的内容 printf 到 USART1 上再给 PC 看。两个口波特率也是独立的
+（日志口 115200，模组可能被改成了 9600，各有各的值）。
+
+### 界面
+
+上面两行选发送口 / 接收口，中间实时回显（`OK` 绿色、`ERROR`/`FAIL` 红色、
 `+CWJAP:` 这类主动上报紫色、本机发出的指令棕色加粗），下面一排 AT 指令点一下就发，
 最底下一行手敲指令回车发送，↑↓ 可以翻发送历史。
 
@@ -127,8 +145,7 @@ C:\Python311\python.exe -m pip install pyserial     # 只装这一次
 - **HEX 收发**：排查二进制报文时用，发送写 `41 54 0D 0A` 这种格式。
 
 接线：USB-TTL 的 TX 接模组 RX、RX 接模组 TX、GND 共地，模组供电 3.3V ——
-**不要**把 5V 直接加到 ESP-01S 的 VCC 上，也不要在 AT 调试时同时接 STM32 的 USART2，
-两个主机同时驱动一根 TX 会互相打架。
+**不要**把 5V 直接加到 ESP-01S 的 VCC 上。
 
 ## 调试建议
 
