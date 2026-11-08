@@ -37,6 +37,7 @@ except ImportError:
 
 BAUDS = ("9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600")
 DEFAULT_BAUD = "115200"
+ENCODINGS = ("自动", "UTF-8", "GBK")
 
 # 快捷指令：(显示名, 指令, 是否直接发送)
 # 带 SSID 的那条只填入输入框不直接发 —— 参数每次都不一样，替用户猜不如让他自己填
@@ -59,7 +60,7 @@ QUICK_CMDS = [
 
 ENDINGS = (("无", b""), ("CR (\\r)", b"\r"), ("LF (\\n)", b"\n"), ("CRLF (\\r\\n)", b"\r\n"))
 
-# Text 标签配色：绿=成功 红=失败 蓝=系统 紫=模组主动上报 棕=本机发出的指令
+# Text 标签配色：绿=成功 红=失败 蓝=系统 紫=模组主动上报 棕=本机发出 灰=二进制报文
 TAGS = {
     "ok": "#1a7f37",
     "err": "#c1121f",
@@ -67,6 +68,7 @@ TAGS = {
     "atr": "#6f42c1",
     "tx": "#8a6d3b",
     "ts": "#9aa0a6",
+    "hex": "#8c6d1f",
 }
 
 TIP_TEXT = "⚠ 收发同一个口 —— 发 AT 指令前把线接到模组 RX，看回显时再接回串口 1（USART1）"
@@ -79,7 +81,7 @@ class AtAssistant:
         self.reader = None
         self.running = threading.Event()
         self.rxq = queue.Queue()
-        self.line_buf = ""
+        self.line_buf = b""         # 收字节，不预先解码：块边界会切断 UTF-8 多字节字符
         self.rx_bytes = 0
         self.tx_bytes = 0
         self.history = []
@@ -181,6 +183,12 @@ class AtAssistant:
         ttk.Checkbutton(opts, text="HEX 显示", variable=self.var_hex_show).pack(side="left", padx=10)
         ttk.Checkbutton(opts, text="自动滚动", variable=self.var_autoscroll).pack(side="left")
 
+        ttk.Label(opts, text="编码").pack(side="left", padx=(18, 0))
+        self.var_encoding = tk.StringVar(value=ENCODINGS[0])
+        ttk.Combobox(
+            opts, textvariable=self.var_encoding, width=7, values=ENCODINGS, state="readonly"
+        ).pack(side="left", padx=4)
+
         # ---- 快捷指令 ----
         box = ttk.LabelFrame(self.root, text=" AT 指令（点一下直接发） ", padding=(8, 6, 8, 8))
         box.grid(row=4, column=0, sticky="ew", padx=10, pady=(4, 2))
@@ -277,6 +285,12 @@ class AtAssistant:
             self.ser = None
             return
 
+        # 缓冲区里堆着的是打开之前的历史数据（多半是上电/复位的噪声），丢掉再开始
+        stale = self.ser.in_waiting
+        if stale:
+            self.ser.reset_input_buffer()
+
+        self.line_buf = b""
         self.running.set()
         self.reader = threading.Thread(target=self._read_loop, args=(self.ser,), daemon=True)
         self.reader.start()
@@ -285,7 +299,8 @@ class AtAssistant:
         self.btn_open.configure(text="关闭串口")
         self.cmb_port.configure(state="disabled")
         self.cmb_baud.configure(state="disabled")
-        self._sys(f"已打开 {self.link_desc}，8N1")
+        tip = f"（丢弃了 {stale} 字节打开前的积压）" if stale else ""
+        self._sys(f"已打开 {self.link_desc}，8N1{tip}")
 
     def _close_port(self):
         self.running.clear()
@@ -340,22 +355,51 @@ class AtAssistant:
             self._write(" ".join(f"{b:02X}" for b in data) + " ")
             return
 
-        self.line_buf += data.decode("utf-8", "replace")
-        # 没换行就不刷出来（AT 响应都是整行），但攒太多说明是透传数据，先倒出来
+        # 关键：字节先攒着，等凑出完整一行再解码。
+        # 直接对每个 read 块 decode 会把 UTF-8 汉字从中间切断，切开的半截全变 �
+        self.line_buf += data
         while True:
-            i = self.line_buf.find("\n")
+            i = self.line_buf.find(b"\n")
             if i < 0:
                 break
-            line, self.line_buf = self.line_buf[:i], self.line_buf[i + 1:]
-            self._write_line(line.rstrip("\r"))
+            raw, self.line_buf = self.line_buf[:i], self.line_buf[i + 1:]
+            self._write_raw_line(raw.rstrip(b"\r"))
 
+        # 一直没换行说明是透传数据，攒太多先倒出来，否则屏幕一片空白
         if len(self.line_buf) > 512:
             self._flush_partial()
 
     def _flush_partial(self):
         if self.line_buf:
-            self._write_line(self.line_buf)
-            self.line_buf = ""
+            self._write_raw_line(self.line_buf)
+            self.line_buf = b""
+
+    def _decode_line(self, raw: bytes):
+        """把一行字节解成文本。返回 (文本, 是否当二进制处理)"""
+        # 行内出现原始控制字符（\t 除外）基本就是二进制报文，转义显示才有意义
+        if any((b < 0x20 and b not in (0x09, 0x0D)) for b in raw):
+            return "", True
+
+        mode = self.var_encoding.get()
+        if mode == "GBK":
+            return raw.decode("gb18030", "replace"), False
+        if mode == "UTF-8":
+            return raw.decode("utf-8", "replace"), False
+        # 自动：先严格按 UTF-8，解不了再退 GB18030（兼容 GBK 工程）
+        try:
+            return raw.decode("utf-8"), False
+        except UnicodeDecodeError:
+            return raw.decode("gb18030", "replace"), False
+
+    def _write_raw_line(self, raw: bytes):
+        text, is_binary = self._decode_line(raw)
+        if is_binary:
+            hexs = " ".join(f"{b:02X}" for b in raw)
+            if self.var_ts.get():
+                self._write(self._stamp(), "ts")
+            self._write(f"[HEX {len(raw)}B] {hexs}\n", "hex")
+            return
+        self._write_line(text)
 
     def _write_line(self, line: str):
         s = line.strip()
